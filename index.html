@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Renderizador 3D - Firebase + Netlify</title>
+  <title>PRODUTOS JP FLEX 3D</title>
 
   <style>
     :root{--bg:#0b1220;--card:#111827;--ink:#e5e7eb;--muted:#9ca3af;--accent:#3b82f6;}
@@ -25,7 +25,7 @@
     ul#resultados{list-style:none;margin:0;padding:0;max-height:520px;overflow:auto}
     ul#resultados li{padding:8px 10px;border:1px solid #263042;border-radius:10px;margin-bottom:8px;cursor:pointer}
     ul#resultados li:hover{background:#0f1a2d}
-    .controls{display:flex;align-items:center;gap:8px;margin-top:10px}
+    .controls{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:10px}
     .controls > *{font-size:13px}
     .meta{margin-top:10px;padding:10px;border:1px dashed #374151;border-radius:10px;color:#cbd5e1;font:12px ui-monospace,Menlo,monospace;word-break:break-all}
   </style>
@@ -49,7 +49,7 @@
 </head>
 <body>
   <main>
-    <h1>Renderizar Modelo 3D (Firestore → Storage)</h1>
+    <h1>PRODUTOS JP FLEX 3D</h1>
 
     <div class="row">
       <input id="busca" placeholder="Digite parte do nome (ex.: BUCHA)" />
@@ -78,6 +78,7 @@
 
         <div class="controls">
           <label><input type="checkbox" id="autoRotate" checked> Auto-rotar (OBJ/STL)</label>
+          <label><input type="checkbox" id="showGrid"> Mostrar grade</label>
           <button id="zoomIn">Zoom +</button>
           <button id="zoomOut">Zoom −</button>
           <button id="reset">Reset</button>
@@ -117,9 +118,10 @@
     const metaEl = document.getElementById('meta');
 
     const autoRotateEl = document.getElementById('autoRotate');
-    const zoomInEl = document.getElementById('zoomIn');
-    const zoomOutEl = document.getElementById('zoomOut');
-    const resetEl = document.getElementById('reset');
+    const showGridEl   = document.getElementById('showGrid');
+    const zoomInEl     = document.getElementById('zoomIn');
+    const zoomOutEl    = document.getElementById('zoomOut');
+    const resetEl      = document.getElementById('reset');
 
     // ===== Helpers =====
     const norm = s => (s || "")
@@ -134,38 +136,55 @@ fileName: ${m.fileName}
 downloadURL: ${m.downloadURL}`;
     }
 
-    // ===== Buscar (exato) =====
+    // ===== Buscar (exato): tenta nomeFold, senão fallback no cliente =====
     async function buscarExato(){
       try{
         const nome = qEl.value.trim();
         if(!nome){ setStatus('Informe um nome (exato).','warn'); return; }
         setStatus('Buscando…');
-        const snap = await db.collection('models').where('nome','==',nome).limit(1).get();
-        if (snap.empty){ setStatus('Nada encontrado (exato).','warn'); return; }
-        const d = snap.docs[0], m = d.data();
-        renderByDoc(d.id, m);
+
+        const alvoFold = norm(nome);
+
+        // 1) tenta pelo campo nomeFold (se existir índice/campo na coleção)
+        let snap;
+        try {
+          snap = await db.collection('models').where('nomeFold','==',alvoFold).limit(1).get();
+        } catch(_) {
+          snap = null; // sem índice/campo, cai no fallback
+        }
+
+        if (snap && !snap.empty){
+          const d = snap.docs[0], m = d.data();
+          renderByDoc(d.id, m);
+          return;
+        }
+
+        // 2) fallback: busca por prefixo 'nome' e filtra no cliente sem caixa/acentos
+        const start = nome, end = nome + '\uf8ff';
+        const pref = await db.collection('models').orderBy('nome').startAt(start).endAt(end).limit(50).get();
+        const hit = pref.docs.find(d => norm(d.data().nome) === alvoFold);
+        if(!hit){ setStatus('Nada encontrado.','warn'); return; }
+        renderByDoc(hit.id, hit.data());
       }catch(e){ console.error(e); setStatus('Erro ao buscar (console).','err'); }
     }
 
-    // ===== Listar por prefixo (case/acentos tolerant no cliente) =====
+    // ===== Listar por prefixo (com tolerância no cliente) =====
     async function listarPrefixo(){
       try{
         const p = qEl.value.trim();
         if(!p){ setStatus('Digite ao menos 1 caractere.','warn'); return; }
         setStatus('Listando…');
 
-        const start = p;
-        const end = p + '\uf8ff';
+        const start = p, end = p + '\uf8ff';
         const snap = await db.collection('models').orderBy('nome').startAt(start).endAt(end).limit(50).get();
 
-        // Filtro extra no cliente: case/acentuação-insensível
         const target = norm(p);
         const docs = snap.docs
           .map(d => ({ id:d.id, data:d.data() }))
           .filter(x => norm(x.data.nome).includes(target));
 
         ul.innerHTML = "";
-        if (!docs.length){ setStatus('Sem resultados para esse prefixo (tente variar o texto).','warn'); return; }
+        if (!docs.length){ setStatus('Sem resultados para esse prefixo.','warn'); return; }
 
         setStatus(`Encontrados: ${docs.length}`,'ok');
         docs.forEach(({id,data:m})=>{
@@ -192,7 +211,6 @@ downloadURL: ${m.downloadURL}`;
       const ext = (m.fileName?.split('.').pop() || '').toLowerCase();
       if(!url){ setStatus('Documento sem downloadURL.','err'); return; }
 
-      // usa proxy Netlify para evitar CORS
       const proxied = '/.netlify/functions/fetch-3d?url=' + encodeURIComponent(url);
 
       if (ext === 'glb' || ext === 'gltf') renderGLTF(proxied);
@@ -200,7 +218,7 @@ downloadURL: ${m.downloadURL}`;
       else setStatus(`Tipo não suportado (.${ext}).`, 'err');
     }
 
-    // GLB/GLTF → model-viewer (360°, zoom/pan nativos)
+    // GLB/GLTF → model-viewer
     function renderGLTF(url){
       mv.style.display='block'; cv.style.display='none';
       mv.src = url;
@@ -208,7 +226,7 @@ downloadURL: ${m.downloadURL}`;
     }
 
     // OBJ/STL → Three.js + OrbitControls
-    let scene, camera, renderer, controls, group;
+    let scene, camera, renderer, controls, group, grid;
     let defaultDist = 6;
 
     function setupThree(){
@@ -231,10 +249,6 @@ downloadURL: ${m.downloadURL}`;
       const dir = new THREE.DirectionalLight(0xffffff, 1);
       dir.position.set(3,5,2);
       scene.add(dir);
-
-      const grid = new THREE.GridHelper(10, 20, 0x222233, 0x222233);
-      grid.position.y = -0.001;
-      scene.add(grid);
 
       group = new THREE.Group();
       scene.add(group);
@@ -287,6 +301,18 @@ downloadURL: ${m.downloadURL}`;
         camera.position.set(0, 1.5, defaultDist);
         controls.update();
 
+        // (re)cria a grade abaixo do modelo
+        if (grid) { scene.remove(grid); grid.geometry?.dispose?.(); grid.material?.dispose?.(); grid = null; }
+        const gridSize = Math.ceil(Math.max(size.x, size.z) * 2) || 10;
+        grid = new THREE.GridHelper(gridSize, gridSize, 0x222233, 0x222233);
+
+        // calcula minY *depois* da centralização/escala
+        const newBox = new THREE.Box3().setFromObject(group);
+        const minY = newBox.min.y;
+        grid.position.y = minY - 0.01; // levemente abaixo
+        grid.visible = !!showGridEl?.checked;
+        scene.add(grid);
+
         setStatus('Modelo carregado. Use mouse para orbitar/zoom/pan.','ok');
       };
 
@@ -304,6 +330,7 @@ downloadURL: ${m.downloadURL}`;
 
     // ===== Controles extras (OBJ/STL) =====
     autoRotateEl.addEventListener('change', ()=>{ if(controls){ controls.autoRotate = autoRotateEl.checked; } });
+    showGridEl.addEventListener('change', ()=>{ if(grid){ grid.visible = showGridEl.checked; } });
     zoomInEl.addEventListener('click', ()=>{ if(camera){ camera.position.multiplyScalar(0.9); } });
     zoomOutEl.addEventListener('click', ()=>{ if(camera){ camera.position.multiplyScalar(1.1); } });
     resetEl.addEventListener('click', ()=>{
@@ -317,7 +344,6 @@ downloadURL: ${m.downloadURL}`;
     document.getElementById('btnBuscar').addEventListener('click', buscarExato);
     document.getElementById('btnListar').addEventListener('click', listarPrefixo);
 
-    // dica se abrir como file://
     if (location.protocol === 'file:') setStatus('Abra via http(s) (Netlify).', 'warn');
   </script>
 </body>
