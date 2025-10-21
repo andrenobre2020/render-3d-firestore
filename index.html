@@ -2,19 +2,100 @@
 <html lang="pt-BR">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Catálogo 3D JP Flex</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Renderizador 3D - Firebase + Netlify</title>
 
-  <!-- Tailwind CSS -->
-  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    :root{--bg:#0b1220;--card:#111827;--ink:#e5e7eb;--muted:#9ca3af;--accent:#3b82f6;}
+    *{box-sizing:border-box}
+    body{margin:0;background:var(--bg);color:var(--ink);font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif}
+    main{max-width:1000px;margin:0 auto;padding:20px}
+    .row{display:flex;gap:8px;flex-wrap:wrap}
+    input,button{padding:12px;border-radius:10px;border:none}
+    input{flex:1;background:#111827;color:#e5e7eb;border:1px solid #1f2937}
+    button{background:var(--accent);color:#fff;font-weight:600;cursor:pointer}
+    .status{margin-top:8px;font-size:13px;color:var(--muted);min-height:18px}
+    .ok{color:#86efac}.err{color:#fca5a5}.warn{color:#fde68a}
+    .layout{display:grid;grid-template-columns:1fr 320px;gap:16px;margin-top:16px}
+    @media (max-width: 980px){.layout{grid-template-columns:1fr}}
+    .viewer{border:1px solid #1f2937;border-radius:12px;overflow:hidden;background:#0b1020}
+    model-viewer,canvas{width:100%;height:560px;display:none;background:#0b1020}
+    .side{background:var(--card);border:1px solid #1f2937;border-radius:12px;padding:12px}
+    .side h3{margin:0 0 10px 0;font-size:16px}
+    ul#resultados{list-style:none;margin:0;padding:0;max-height:520px;overflow:auto}
+    ul#resultados li{padding:8px 10px;border:1px solid #263042;border-radius:10px;margin-bottom:8px;cursor:pointer}
+    ul#resultados li:hover{background:#0f1a2d}
+    .controls{display:flex;align-items:center;gap:8px;margin-top:10px}
+    .controls > *{font-size:13px}
+    .meta{margin-top:10px;padding:10px;border:1px dashed #374151;border-radius:10px;color:#cbd5e1;font:12px ui-monospace,Menlo,monospace;word-break:break-all}
+  </style>
 
-  <!-- Firebase -->
+  <!-- model-viewer (GLB/GLTF) -->
+  <script type="module" src="https://unpkg.com/@google/model-viewer/dist/model-viewer.min.js"></script>
+
+  <!-- Firebase compat -->
+  <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-firestore-compat.js"></script>
+
+  <!-- Import map (Three.js + addons) -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.152.2/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.152.2/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <main>
+    <h1>Renderizar Modelo 3D (Firestore → Storage)</h1>
+
+    <div class="row">
+      <input id="busca" placeholder="Digite parte do nome (ex.: BUCHA)" />
+      <button id="btnBuscar">Buscar exato</button>
+      <button id="btnListar">Listar por prefixo</button>
+    </div>
+    <div id="status" class="status"></div>
+
+    <div class="layout">
+      <div class="viewer">
+        <model-viewer
+          id="mv"
+          camera-controls
+          auto-rotate
+          enable-pan
+          interaction-prompt="when-focused"
+          exposure="1.1"
+          shadow-intensity="1">
+        </model-viewer>
+        <canvas id="cv"></canvas>
+      </div>
+
+      <aside class="side">
+        <h3>Resultados</h3>
+        <ul id="resultados"></ul>
+
+        <div class="controls">
+          <label><input type="checkbox" id="autoRotate" checked> Auto-rotar (OBJ/STL)</label>
+          <button id="zoomIn">Zoom +</button>
+          <button id="zoomOut">Zoom −</button>
+          <button id="reset">Reset</button>
+        </div>
+
+        <div id="meta" class="meta" style="display:none"></div>
+      </aside>
+    </div>
+  </main>
+
   <script type="module">
-    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.3/firebase-app.js";
-    import { getFirestore, collection, query, where, getDocs } from "https://www.gstatic.com/firebasejs/10.12.3/firebase-firestore.js";
+    import * as THREE from 'three';
+    import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
+    import { STLLoader } from 'three/addons/loaders/STLLoader.js';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
-    // 🔥 Configuração Firebase
-  const firebaseConfig = {
+    // ===== Firebase =====
+    const firebaseConfig = {
       apiKey: "AIzaSyDRm8V72O97F0Jr9jquRqAB81zn7eNX-VY",
       authDomain: "graduacaofator.firebaseapp.com",
       projectId: "graduacaofator",
@@ -22,69 +103,222 @@
       messagingSenderId: "394958579615",
       appId: "1:394958579615:web:6d3726fe846c687300bfaa"
     };
+    if (!firebase.apps?.length) firebase.initializeApp(firebaseConfig);
+    const db = firebase.firestore();
 
-    // Inicializa Firebase e Firestore
-    const app = initializeApp(firebaseConfig);
-    const db = getFirestore(app);
+    // ===== UI =====
+    const qEl = document.getElementById('busca');
+    const statusEl = document.getElementById('status');
+    const setStatus = (msg, cls="") => { statusEl.className="status "+cls; statusEl.textContent=msg||""; };
 
-    // Quando a página carregar
-    window.addEventListener("DOMContentLoaded", () => {
-      const btnBuscar = document.getElementById("btnBuscar");
-      const input = document.getElementById("busca");
-      const resultados = document.getElementById("resultados");
+    const ul = document.getElementById('resultados');
+    const mv = document.getElementById('mv');
+    const cv = document.getElementById('cv');
+    const metaEl = document.getElementById('meta');
 
-      btnBuscar.addEventListener("click", async () => {
-        const termo = input.value.trim();
-        resultados.innerHTML = `<p class='text-gray-400'>Buscando...</p>`;
-        if (!termo) return;
+    const autoRotateEl = document.getElementById('autoRotate');
+    const zoomInEl = document.getElementById('zoomIn');
+    const zoomOutEl = document.getElementById('zoomOut');
+    const resetEl = document.getElementById('reset');
 
-        try {
-          const q = query(collection(db, "models"), where("nome", "==", termo));
-          const snap = await getDocs(q);
+    // ===== Helpers =====
+    const norm = s => (s || "")
+      .normalize("NFD").replace(/\p{Diacritic}/gu,'')
+      .toLowerCase().trim();
 
-          if (snap.empty) {
-            resultados.innerHTML = `<p class='text-red-500'>Nenhum modelo encontrado para "${termo}".</p>`;
-            return;
-          }
+    function showMeta(id, m){
+      metaEl.style.display='block';
+      metaEl.textContent = `docId: ${id}
+nome: ${m.nome}
+fileName: ${m.fileName}
+downloadURL: ${m.downloadURL}`;
+    }
 
-          resultados.innerHTML = "";
-          snap.forEach((doc) => {
-            const data = doc.data();
-            const card = document.createElement("div");
-            card.className = "p-4 border rounded-lg shadow mb-6 bg-white";
+    // ===== Buscar (exato) =====
+    async function buscarExato(){
+      try{
+        const nome = qEl.value.trim();
+        if(!nome){ setStatus('Informe um nome (exato).','warn'); return; }
+        setStatus('Buscando…');
+        const snap = await db.collection('models').where('nome','==',nome).limit(1).get();
+        if (snap.empty){ setStatus('Nada encontrado (exato).','warn'); return; }
+        const d = snap.docs[0], m = d.data();
+        renderByDoc(d.id, m);
+      }catch(e){ console.error(e); setStatus('Erro ao buscar (console).','err'); }
+    }
 
-            card.innerHTML = `
-              <h2 class="text-lg font-semibold mb-2">${data.nome}</h2>
-              <model-viewer src="${data.url}" alt="${data.nome}" camera-controls auto-rotate shadow-intensity="1" style="width:100%; height:300px;"></model-viewer>
-              <p class="text-gray-600 text-sm mt-2">${data.descricao || "Sem descrição."}</p>
-            `;
+    // ===== Listar por prefixo (case/acentos tolerant no cliente) =====
+    async function listarPrefixo(){
+      try{
+        const p = qEl.value.trim();
+        if(!p){ setStatus('Digite ao menos 1 caractere.','warn'); return; }
+        setStatus('Listando…');
 
-            resultados.appendChild(card);
-          });
-        } catch (e) {
-          console.error("Erro ao buscar:", e);
-          resultados.innerHTML = `<p class='text-red-500'>Erro ao buscar modelos.</p>`;
-        }
-      });
+        const start = p;
+        const end = p + '\uf8ff';
+        const snap = await db.collection('models').orderBy('nome').startAt(start).endAt(end).limit(50).get();
+
+        // Filtro extra no cliente: case/acentuação-insensível
+        const target = norm(p);
+        const docs = snap.docs
+          .map(d => ({ id:d.id, data:d.data() }))
+          .filter(x => norm(x.data.nome).includes(target));
+
+        ul.innerHTML = "";
+        if (!docs.length){ setStatus('Sem resultados para esse prefixo (tente variar o texto).','warn'); return; }
+
+        setStatus(`Encontrados: ${docs.length}`,'ok');
+        docs.forEach(({id,data:m})=>{
+          const li = document.createElement('li');
+          li.textContent = `${m.nome || '(sem nome)'} — ${m.fileName || ''}`;
+          li.title = 'Clique para renderizar';
+          li.onclick = ()=> renderByDoc(id, m);
+          ul.appendChild(li);
+        });
+      }catch(e){ console.error(e); setStatus('Erro ao listar (console).','err'); }
+    }
+
+    // Sugestões em tempo real (debounce)
+    let t=null;
+    qEl.addEventListener('input', ()=>{
+      clearTimeout(t);
+      t = setTimeout(()=>{ if(qEl.value.trim()) listarPrefixo(); else ul.innerHTML=""; }, 250);
     });
+
+    // ===== Render =====
+    function renderByDoc(docId, m){
+      showMeta(docId, m);
+      const url = m.downloadURL;
+      const ext = (m.fileName?.split('.').pop() || '').toLowerCase();
+      if(!url){ setStatus('Documento sem downloadURL.','err'); return; }
+
+      // usa proxy Netlify para evitar CORS
+      const proxied = '/.netlify/functions/fetch-3d?url=' + encodeURIComponent(url);
+
+      if (ext === 'glb' || ext === 'gltf') renderGLTF(proxied);
+      else if (ext === 'obj' || ext === 'stl') renderOBJorSTL(proxied, ext);
+      else setStatus(`Tipo não suportado (.${ext}).`, 'err');
+    }
+
+    // GLB/GLTF → model-viewer (360°, zoom/pan nativos)
+    function renderGLTF(url){
+      mv.style.display='block'; cv.style.display='none';
+      mv.src = url;
+      setStatus('Carregando GLB/GLTF…','ok');
+    }
+
+    // OBJ/STL → Three.js + OrbitControls
+    let scene, camera, renderer, controls, group;
+    let defaultDist = 6;
+
+    function setupThree(){
+      // destruir anteriores
+      renderer?.dispose?.();
+      scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x0b1020);
+
+      const w = cv.clientWidth || 1000, h = 560;
+      cv.width = w; cv.height = h;
+
+      camera = new THREE.PerspectiveCamera(45, w/h, 0.1, 1000);
+      camera.position.set(2.5, 2.0, 3.5);
+
+      renderer = new THREE.WebGLRenderer({ canvas: cv, antialias: true });
+      renderer.setSize(w, h);
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+
+      scene.add(new THREE.HemisphereLight(0xffffff, 0x202020, 1.2));
+      const dir = new THREE.DirectionalLight(0xffffff, 1);
+      dir.position.set(3,5,2);
+      scene.add(dir);
+
+      const grid = new THREE.GridHelper(10, 20, 0x222233, 0x222233);
+      grid.position.y = -0.001;
+      scene.add(grid);
+
+      group = new THREE.Group();
+      scene.add(group);
+
+      controls = new OrbitControls(camera, renderer.domElement);
+      controls.enableDamping = true;
+      controls.dampingFactor = 0.05;
+      controls.enablePan = true;
+      controls.autoRotate = autoRotateEl.checked;
+      controls.autoRotateSpeed = 1.0;
+
+      // resize responsivo
+      new ResizeObserver(()=> {
+        const W = cv.clientWidth || 1000, H = 560;
+        cv.width = W; cv.height = H;
+        renderer.setSize(W, H);
+        camera.aspect = W/H;
+        camera.updateProjectionMatrix();
+      }).observe(cv);
+    }
+
+    function renderOBJorSTL(url, kind){
+      mv.style.display='none'; cv.style.display='block';
+      setupThree();
+
+      const finish = (objOrGeo) => {
+        let obj = objOrGeo;
+        if (kind === 'stl') {
+          obj = new THREE.Mesh(
+            objOrGeo,
+            new THREE.MeshStandardMaterial({ color: 0xcccccc, metalness: 0.1, roughness: 0.6 })
+          );
+        }
+        obj.traverse?.(n=>{
+          if(n.isMesh && !n.material) n.material = new THREE.MeshStandardMaterial({color:0xcccccc});
+        });
+        group.clear();
+        group.add(obj);
+
+        // centraliza e normaliza escala
+        const box = new THREE.Box3().setFromObject(group);
+        const size = new THREE.Vector3(); box.getSize(size);
+        const center = new THREE.Vector3(); box.getCenter(center);
+        group.position.sub(center);
+        const maxDim = Math.max(size.x,size.y,size.z) || 1;
+        group.scale.setScalar(2 / maxDim);
+
+        // posiciona câmera/controls
+        controls.target.set(0,0,0);
+        camera.position.set(0, 1.5, defaultDist);
+        controls.update();
+
+        setStatus('Modelo carregado. Use mouse para orbitar/zoom/pan.','ok');
+      };
+
+      const onErr = (e)=>{ console.error(e); setStatus('Erro ao carregar (CORS/arquivo).','err'); };
+
+      if (kind === 'obj') new OBJLoader().load(url, finish, undefined, onErr);
+      else new STLLoader().load(url, geo=>finish(geo), undefined, onErr);
+
+      (function animate(){
+        requestAnimationFrame(animate);
+        controls?.update();
+        renderer.render(scene, camera);
+      })();
+    }
+
+    // ===== Controles extras (OBJ/STL) =====
+    autoRotateEl.addEventListener('change', ()=>{ if(controls){ controls.autoRotate = autoRotateEl.checked; } });
+    zoomInEl.addEventListener('click', ()=>{ if(camera){ camera.position.multiplyScalar(0.9); } });
+    zoomOutEl.addEventListener('click', ()=>{ if(camera){ camera.position.multiplyScalar(1.1); } });
+    resetEl.addEventListener('click', ()=>{
+      if(!camera || !controls || !group) return;
+      controls.target.set(0,0,0);
+      camera.position.set(0, 1.5, defaultDist);
+      controls.update();
+    });
+
+    // ===== Ações =====
+    document.getElementById('btnBuscar').addEventListener('click', buscarExato);
+    document.getElementById('btnListar').addEventListener('click', listarPrefixo);
+
+    // dica se abrir como file://
+    if (location.protocol === 'file:') setStatus('Abra via http(s) (Netlify).', 'warn');
   </script>
-
-  <!-- Model Viewer -->
-  <script type="module" src="https://unpkg.com/@google/model-viewer@3.3.0/dist/model-viewer.min.js"></script>
-</head>
-
-<body class="bg-gray-100 text-gray-800 min-h-screen">
-  <div class="max-w-3xl mx-auto p-6">
-    <h1 class="text-2xl font-bold mb-4 text-center">Catálogo 3D JP Flex</h1>
-
-    <div class="flex gap-2 mb-6">
-      <input id="busca" type="text" placeholder="Digite o nome do modelo..."
-        class="flex-1 p-2 border rounded focus:outline-none focus:ring focus:ring-blue-200" />
-      <button id="btnBuscar"
-        class="bg-blue-600 text-white px-4 rounded hover:bg-blue-700 transition">Buscar</button>
-    </div>
-
-    <div id="resultados"></div>
-  </div>
 </body>
 </html>
