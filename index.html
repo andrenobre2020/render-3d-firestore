@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>PRODUTOS JP FLEX 3D</title>
+  <title>PRODUTOS JP FLEX 3D </title>
 
   <style>
     :root{--bg:#0b1220;--card:#111827;--ink:#e5e7eb;--muted:#9ca3af;--accent:#3b82f6;}
@@ -30,14 +30,14 @@
     .meta{margin-top:10px;padding:10px;border:1px dashed #374151;border-radius:10px;color:#cbd5e1;font:12px ui-monospace,Menlo,monospace;word-break:break-all}
   </style>
 
-  <!-- model-viewer (GLB/GLTF) -->
+  <!-- model-viewer -->
   <script type="module" src="https://unpkg.com/@google/model-viewer/dist/model-viewer.min.js"></script>
 
   <!-- Firebase compat -->
   <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-firestore-compat.js"></script>
 
-  <!-- Import map (Three.js + addons) -->
+  <!-- Three.js import map -->
   <script type="importmap">
   {
     "imports": {
@@ -49,7 +49,7 @@
 </head>
 <body>
   <main>
-    <h1>PRODUTOS JP FLEX 3D</h1>
+    <h1>PRODUTOS JP FLEX 3D </h1>
 
     <div class="row">
       <input id="busca" placeholder="Digite parte do nome (ex.: BUCHA)" />
@@ -60,30 +60,20 @@
 
     <div class="layout">
       <div class="viewer">
-        <model-viewer
-          id="mv"
-          camera-controls
-          auto-rotate
-          enable-pan
-          interaction-prompt="when-focused"
-          exposure="1.1"
-          shadow-intensity="1">
-        </model-viewer>
+        <model-viewer id="mv" camera-controls auto-rotate enable-pan></model-viewer>
         <canvas id="cv"></canvas>
       </div>
 
       <aside class="side">
         <h3>Resultados</h3>
         <ul id="resultados"></ul>
-
         <div class="controls">
-          <label><input type="checkbox" id="autoRotate" checked> Auto-rotar (OBJ/STL)</label>
+          <label><input type="checkbox" id="autoRotate" checked> Auto-rotar</label>
           <label><input type="checkbox" id="showGrid" checked> Mostrar grade</label>
           <button id="zoomIn">Zoom +</button>
           <button id="zoomOut">Zoom −</button>
           <button id="reset">Reset</button>
         </div>
-
         <div id="meta" class="meta" style="display:none"></div>
       </aside>
     </div>
@@ -95,6 +85,8 @@
     import { STLLoader } from 'three/addons/loaders/STLLoader.js';
     import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
+    console.log("🔥 Iniciando aplicação JP FLEX 3D DEBUG...");
+
     // ===== Firebase =====
     const firebaseConfig = {
       apiKey: "AIzaSyDRm8V72O97F0Jr9jquRqAB81zn7eNX-VY",
@@ -104,10 +96,20 @@
       messagingSenderId: "394958579615",
       appId: "1:394958579615:web:6d3726fe846c687300bfaa"
     };
-    if (!firebase.apps?.length) firebase.initializeApp(firebaseConfig);
-    const db = firebase.firestore();
 
-    // ===== UI =====
+    try {
+      if (!firebase.apps?.length) firebase.initializeApp(firebaseConfig);
+      console.log("✅ Firebase inicializado:", firebase.apps.length);
+    } catch (e) {
+      console.error("❌ Erro ao inicializar Firebase:", e);
+    }
+
+    const db = firebase.firestore();
+    db.collection("models").limit(1).get()
+      .then(s => console.log(`✅ Firestore conectado (${s.size} docs)`))
+      .catch(e => console.error("❌ Erro Firestore:", e));
+
+    // ===== Elementos UI =====
     const qEl = document.getElementById('busca');
     const statusEl = document.getElementById('status');
     const setStatus = (msg, cls="") => { statusEl.className="status "+cls; statusEl.textContent=msg||""; };
@@ -116,7 +118,6 @@
     const mv = document.getElementById('mv');
     const cv = document.getElementById('cv');
     const metaEl = document.getElementById('meta');
-
     const autoRotateEl = document.getElementById('autoRotate');
     const showGridEl   = document.getElementById('showGrid');
     const zoomInEl     = document.getElementById('zoomIn');
@@ -124,10 +125,7 @@
     const resetEl      = document.getElementById('reset');
 
     // ===== Helpers =====
-    const norm = s => (s || "")
-      .normalize("NFD").replace(/\p{Diacritic}/gu,'')
-      .toLowerCase().trim();
-
+    const norm = s => (s || "").normalize("NFD").replace(/\p{Diacritic}/gu,'').toLowerCase().trim();
     function showMeta(id, m){
       metaEl.style.display='block';
       metaEl.textContent = `docId: ${id}
@@ -136,86 +134,70 @@ fileName: ${m.fileName}
 downloadURL: ${m.downloadURL}`;
     }
 
-    // ===== Buscar (exato): tenta nomeFold, senão fallback no cliente =====
+    // ===== Buscar Exato =====
     async function buscarExato(){
+      console.log("🟦 Clique em Buscar detectado");
       try{
         const nome = qEl.value.trim();
         if(!nome){ setStatus('Informe um nome (exato).','warn'); return; }
         setStatus('Buscando…');
+        console.log("→ Buscando nome:", nome);
 
         const alvoFold = norm(nome);
-
-        // 1) tenta pelo campo nomeFold (se existir índice/campo na coleção)
         let snap = null;
+
         try {
           snap = await db.collection('models').where('nomeFold','==',alvoFold).limit(1).get();
-        } catch(_) {}
+          console.log("→ Query nomeFold retornou:", snap.size, "docs");
+        } catch (err) {
+          console.warn("⚠️ Erro na query nomeFold:", err);
+        }
 
         if (snap && !snap.empty){
           const d = snap.docs[0], m = d.data();
+          console.log("✅ Encontrado (nomeFold):", m.nome);
           renderByDoc(d.id, m);
           return;
         }
 
-        // 2) fallback: pega uma janela e confere via norm()
         const pref = await db.collection('models').limit(200).get();
+        console.log("→ Fallback local (200 docs)");
         const hit = pref.docs.find(d => norm(d.data().nome) === alvoFold);
-        if(!hit){ setStatus('Nada encontrado.','warn'); return; }
+        if(!hit){ setStatus('Nada encontrado.','warn'); console.warn("❌ Nenhum match exato encontrado."); return; }
+
+        console.log("✅ Encontrado (fallback local):", hit.data().nome);
         renderByDoc(hit.id, hit.data());
-      }catch(e){ console.error(e); setStatus('Erro ao buscar (console).','err'); }
+      }catch(e){ console.error("❌ Erro ao buscar:", e); setStatus('Erro ao buscar (veja console).','err'); }
     }
 
-    // ===== Listar por prefixo (case/acent-insensitive) =====
+    // ===== Listar por prefixo =====
     async function listarPrefixo(){
+      console.log("🟨 Listando por prefixo…");
       try{
         const p = qEl.value.trim();
         if(!p){ setStatus('Digite ao menos 1 caractere.','warn'); return; }
         setStatus('Listando…');
 
         const alvo = norm(p);
+        console.log("→ Prefixo normalizado:", alvo);
 
-        // 1) tentativa ideal: prefixo em nomeFold (requer índice simples em nomeFold asc)
+        let docs = [];
         try{
           const start = alvo, end = alvo + '\uf8ff';
           const snap = await db.collection('models').orderBy('nomeFold').startAt(start).endAt(end).limit(50).get();
           if (!snap.empty){
-            paintResults(snap.docs.map(d => ({id:d.id, data:d.data()})));
+            docs = snap.docs.map(d => ({id:d.id, data:d.data()}));
+            console.log("✅ Query prefixo:", docs.length, "resultados");
+            paintResults(docs);
             return;
           }
-        } catch(_) { /* cai no fallback */ }
+        } catch(e){ console.warn("⚠️ Erro query nomeFold prefixo:", e); }
 
-        // 2) fallback: três janelas por 'nome' (original/upper/lower) + filtro norm() no cliente
-        const tries = [
-          [p, p + '\uf8ff'],
-          [p.toUpperCase(), p.toUpperCase() + '\uf8ff'],
-          [p.toLowerCase(), p.toLowerCase() + '\uf8ff'],
-        ];
-
-        const seen = new Map();
-        for (const [start,end] of tries){
-          try{
-            const snap = await db.collection('models').orderBy('nome').startAt(start).endAt(end).limit(50).get();
-            snap.docs.forEach(d => {
-              const m = d.data();
-              if (norm(m?.nome||'').includes(alvo)) seen.set(d.id, {id:d.id, data:m});
-            });
-          }catch(_){}
-        }
-
-        // 3) fallback amplo: carrega até 200 e filtra local
-        if (seen.size === 0){
-          const wide = await db.collection('models').limit(200).get();
-          wide.docs.forEach(d=>{
-            const m = d.data();
-            if (norm(m?.nome||'').includes(alvo)) seen.set(d.id, {id:d.id, data:m});
-          });
-        }
-
-        const docs = Array.from(seen.values());
-        if (!docs.length){ setStatus('Sem resultados para esse prefixo.','warn'); ul.innerHTML=""; return; }
-
+        const wide = await db.collection('models').limit(200).get();
+        docs = wide.docs.filter(d => norm(d.data().nome||'').includes(alvo)).map(d => ({id:d.id, data:d.data()}));
+        console.log("→ Fallback local:", docs.length, "docs");
         paintResults(docs);
-      }catch(e){ console.error(e); setStatus('Erro ao listar (console).','err'); }
+      }catch(e){ console.error("❌ Erro ao listar:", e); setStatus('Erro ao listar (console).','err'); }
     }
 
     function paintResults(docs){
@@ -224,54 +206,44 @@ downloadURL: ${m.downloadURL}`;
       docs.forEach(({id,data:m})=>{
         const li = document.createElement('li');
         li.textContent = `${m.nome || '(sem nome)'} — ${m.fileName || ''}`;
-        li.title = 'Clique para renderizar';
         li.onclick = ()=> renderByDoc(id, m);
         ul.appendChild(li);
       });
     }
 
-    // Sugestões em tempo real (debounce)
-    let t=null;
-    qEl.addEventListener('input', ()=>{
-      clearTimeout(t);
-      t = setTimeout(()=>{ if(qEl.value.trim()) listarPrefixo(); else ul.innerHTML=""; }, 250);
-    });
-
-    // ===== Render =====
+    // ===== Renderizador =====
     function renderByDoc(docId, m){
+      console.log("🎨 Renderizando modelo:", m.fileName);
       showMeta(docId, m);
       const url = m.downloadURL;
       const ext = (m.fileName?.split('.').pop() || '').toLowerCase();
       if(!url){ setStatus('Documento sem downloadURL.','err'); return; }
 
       const proxied = '/.netlify/functions/fetch-3d?url=' + encodeURIComponent(url);
-
       if (ext === 'glb' || ext === 'gltf') renderGLTF(proxied);
       else if (ext === 'obj' || ext === 'stl') renderOBJorSTL(proxied, ext);
       else setStatus(`Tipo não suportado (.${ext}).`, 'err');
     }
 
-    // GLB/GLTF → model-viewer
+    // ===== Render GLTF =====
     function renderGLTF(url){
       mv.style.display='block'; cv.style.display='none';
       mv.src = url;
       setStatus('Carregando GLB/GLTF…','ok');
     }
 
-    // OBJ/STL → Three.js + OrbitControls
+    // ===== Render OBJ/STL =====
     let scene, camera, renderer, controls, group, grid;
     const defaultDist = 6;
 
     function setupThree(){
-      // destruir anteriores
       renderer?.dispose?.();
       scene = new THREE.Scene();
       scene.background = new THREE.Color(0x0b1020);
 
       const w = cv.clientWidth || 1000, h = 560;
       cv.width = w; cv.height = h;
-
-      camera = new THREE.PerspectiveCamera(45, w/h, 0.05, 5000); // near/far seguros
+      camera = new THREE.PerspectiveCamera(45, w/h, 0.05, 5000);
       camera.position.set(2.5, 2.0, 3.5);
 
       renderer = new THREE.WebGLRenderer({ canvas: cv, antialias: true });
@@ -288,14 +260,8 @@ downloadURL: ${m.downloadURL}`;
 
       controls = new OrbitControls(camera, renderer.domElement);
       controls.enableDamping = true;
-      controls.dampingFactor = 0.05;
-      controls.enablePan = true;
       controls.autoRotate = autoRotateEl.checked;
-      controls.autoRotateSpeed = 1.0;
-      controls.minDistance = 1.0;   // impede “entrar” no objeto
-      controls.maxDistance = 50.0;  // evita afastar demais
 
-      // resize responsivo
       new ResizeObserver(()=> {
         const W = cv.clientWidth || 1000, H = 560;
         cv.width = W; cv.height = H;
@@ -312,52 +278,16 @@ downloadURL: ${m.downloadURL}`;
       const finish = (objOrGeo) => {
         let obj = objOrGeo;
         if (kind === 'stl') {
-          obj = new THREE.Mesh(
-            objOrGeo,
-            new THREE.MeshStandardMaterial({ color: 0xcccccc, metalness: 0.1, roughness: 0.6 })
-          );
+          obj = new THREE.Mesh(objOrGeo,new THREE.MeshStandardMaterial({ color: 0xcccccc }));
         }
-        obj.traverse?.(n=>{
-          if(n.isMesh && !n.material) n.material = new THREE.MeshStandardMaterial({color:0xcccccc});
-        });
-        group.clear();
-        group.add(obj);
-
-        // centraliza e normaliza escala
+        obj.traverse?.(n=>{ if(n.isMesh && !n.material) n.material = new THREE.MeshStandardMaterial({color:0xcccccc}); });
+        group.clear(); group.add(obj);
         const box = new THREE.Box3().setFromObject(group);
-        const size = new THREE.Vector3(); box.getSize(size);
         const center = new THREE.Vector3(); box.getCenter(center);
         group.position.sub(center);
-        const maxDim = Math.max(size.x,size.y,size.z) || 1;
-        group.scale.setScalar(2 / maxDim);
-
-        // posiciona câmera/controls
-        controls.target.set(0,0,0);
-        camera.position.set(0, 1.5, defaultDist);
-        controls.update();
-
-        // (re)cria a grade abaixo do modelo — SEM atravessar
-        if (grid) {
-          scene.remove(grid);
-          grid.geometry?.dispose?.();
-          grid.material?.dispose?.();
-          grid = null;
-        }
-        const newBox = new THREE.Box3().setFromObject(group);
-        const newSize = new THREE.Vector3(); newBox.getSize(newSize);
-        const minY = newBox.min.y;
-
-        const gridSize = Math.ceil(Math.max(newSize.x, newSize.z) * 2) || 10;
-        grid = new THREE.GridHelper(gridSize, gridSize, 0x222233, 0x222233);
-        // coloca a grade um pouco ABAIXO do modelo
-        grid.position.y = minY - Math.max(0.01, newSize.y * 0.02);
-        grid.visible = !!showGridEl?.checked;
-        scene.add(grid);
-
-        setStatus('Modelo carregado. Use mouse para orbitar/zoom/pan.','ok');
+        setStatus('Modelo carregado.','ok');
       };
-
-      const onErr = (e)=>{ console.error(e); setStatus('Erro ao carregar (CORS/arquivo).','err'); };
+      const onErr = e => { console.error("❌ Erro carregando modelo:", e); setStatus('Erro ao carregar (CORS/arquivo).','err'); };
 
       if (kind === 'obj') new OBJLoader().load(url, finish, undefined, onErr);
       else new STLLoader().load(url, geo=>finish(geo), undefined, onErr);
@@ -369,23 +299,18 @@ downloadURL: ${m.downloadURL}`;
       })();
     }
 
-    // ===== Controles extras (OBJ/STL) =====
+    // ===== Controles =====
     autoRotateEl.addEventListener('change', ()=>{ if(controls){ controls.autoRotate = autoRotateEl.checked; } });
     showGridEl.addEventListener('change', ()=>{ if(grid){ grid.visible = showGridEl.checked; } });
     zoomInEl.addEventListener('click', ()=>{ if(camera){ camera.position.multiplyScalar(0.9); } });
     zoomOutEl.addEventListener('click', ()=>{ if(camera){ camera.position.multiplyScalar(1.1); } });
-    resetEl.addEventListener('click', ()=>{
-      if(!camera || !controls || !group) return;
-      controls.target.set(0,0,0);
-      camera.position.set(0, 1.5, defaultDist);
-      controls.update();
-    });
+    resetEl.addEventListener('click', ()=>{ if(camera){ camera.position.set(0,1.5,defaultDist); controls.target.set(0,0,0); controls.update(); } });
 
-    // ===== Ações =====
+    // ===== Botões =====
     document.getElementById('btnBuscar').addEventListener('click', buscarExato);
     document.getElementById('btnListar').addEventListener('click', listarPrefixo);
 
-    if (location.protocol === 'file:') setStatus('Abra via http(s) (Netlify).', 'warn');
+    if (location.protocol === 'file:') setStatus('⚠️ Abra via http(s) (não file://)', 'warn');
   </script>
 </body>
 </html>
