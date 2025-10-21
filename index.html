@@ -78,7 +78,7 @@
 
         <div class="controls">
           <label><input type="checkbox" id="autoRotate" checked> Auto-rotar (OBJ/STL)</label>
-          <label><input type="checkbox" id="showGrid"> Mostrar grade</label>
+          <label><input type="checkbox" id="showGrid" checked> Mostrar grade</label>
           <button id="zoomIn">Zoom +</button>
           <button id="zoomOut">Zoom −</button>
           <button id="reset">Reset</button>
@@ -146,12 +146,10 @@ downloadURL: ${m.downloadURL}`;
         const alvoFold = norm(nome);
 
         // 1) tenta pelo campo nomeFold (se existir índice/campo na coleção)
-        let snap;
+        let snap = null;
         try {
           snap = await db.collection('models').where('nomeFold','==',alvoFold).limit(1).get();
-        } catch(_) {
-          snap = null; // sem índice/campo, cai no fallback
-        }
+        } catch(_) {}
 
         if (snap && !snap.empty){
           const d = snap.docs[0], m = d.data();
@@ -159,42 +157,77 @@ downloadURL: ${m.downloadURL}`;
           return;
         }
 
-        // 2) fallback: busca por prefixo 'nome' e filtra no cliente sem caixa/acentos
-        const start = nome, end = nome + '\uf8ff';
-        const pref = await db.collection('models').orderBy('nome').startAt(start).endAt(end).limit(50).get();
+        // 2) fallback: pega uma janela e confere via norm()
+        const pref = await db.collection('models').limit(200).get();
         const hit = pref.docs.find(d => norm(d.data().nome) === alvoFold);
         if(!hit){ setStatus('Nada encontrado.','warn'); return; }
         renderByDoc(hit.id, hit.data());
       }catch(e){ console.error(e); setStatus('Erro ao buscar (console).','err'); }
     }
 
-    // ===== Listar por prefixo (com tolerância no cliente) =====
+    // ===== Listar por prefixo (case/acent-insensitive) =====
     async function listarPrefixo(){
       try{
         const p = qEl.value.trim();
         if(!p){ setStatus('Digite ao menos 1 caractere.','warn'); return; }
         setStatus('Listando…');
 
-        const start = p, end = p + '\uf8ff';
-        const snap = await db.collection('models').orderBy('nome').startAt(start).endAt(end).limit(50).get();
+        const alvo = norm(p);
 
-        const target = norm(p);
-        const docs = snap.docs
-          .map(d => ({ id:d.id, data:d.data() }))
-          .filter(x => norm(x.data.nome).includes(target));
+        // 1) tentativa ideal: prefixo em nomeFold (requer índice simples em nomeFold asc)
+        try{
+          const start = alvo, end = alvo + '\uf8ff';
+          const snap = await db.collection('models').orderBy('nomeFold').startAt(start).endAt(end).limit(50).get();
+          if (!snap.empty){
+            paintResults(snap.docs.map(d => ({id:d.id, data:d.data()})));
+            return;
+          }
+        } catch(_) { /* cai no fallback */ }
 
-        ul.innerHTML = "";
-        if (!docs.length){ setStatus('Sem resultados para esse prefixo.','warn'); return; }
+        // 2) fallback: três janelas por 'nome' (original/upper/lower) + filtro norm() no cliente
+        const tries = [
+          [p, p + '\uf8ff'],
+          [p.toUpperCase(), p.toUpperCase() + '\uf8ff'],
+          [p.toLowerCase(), p.toLowerCase() + '\uf8ff'],
+        ];
 
-        setStatus(`Encontrados: ${docs.length}`,'ok');
-        docs.forEach(({id,data:m})=>{
-          const li = document.createElement('li');
-          li.textContent = `${m.nome || '(sem nome)'} — ${m.fileName || ''}`;
-          li.title = 'Clique para renderizar';
-          li.onclick = ()=> renderByDoc(id, m);
-          ul.appendChild(li);
-        });
+        const seen = new Map();
+        for (const [start,end] of tries){
+          try{
+            const snap = await db.collection('models').orderBy('nome').startAt(start).endAt(end).limit(50).get();
+            snap.docs.forEach(d => {
+              const m = d.data();
+              if (norm(m?.nome||'').includes(alvo)) seen.set(d.id, {id:d.id, data:m});
+            });
+          }catch(_){}
+        }
+
+        // 3) fallback amplo: carrega até 200 e filtra local
+        if (seen.size === 0){
+          const wide = await db.collection('models').limit(200).get();
+          wide.docs.forEach(d=>{
+            const m = d.data();
+            if (norm(m?.nome||'').includes(alvo)) seen.set(d.id, {id:d.id, data:m});
+          });
+        }
+
+        const docs = Array.from(seen.values());
+        if (!docs.length){ setStatus('Sem resultados para esse prefixo.','warn'); ul.innerHTML=""; return; }
+
+        paintResults(docs);
       }catch(e){ console.error(e); setStatus('Erro ao listar (console).','err'); }
+    }
+
+    function paintResults(docs){
+      ul.innerHTML = "";
+      setStatus(`Encontrados: ${docs.length}`,'ok');
+      docs.forEach(({id,data:m})=>{
+        const li = document.createElement('li');
+        li.textContent = `${m.nome || '(sem nome)'} — ${m.fileName || ''}`;
+        li.title = 'Clique para renderizar';
+        li.onclick = ()=> renderByDoc(id, m);
+        ul.appendChild(li);
+      });
     }
 
     // Sugestões em tempo real (debounce)
@@ -227,7 +260,7 @@ downloadURL: ${m.downloadURL}`;
 
     // OBJ/STL → Three.js + OrbitControls
     let scene, camera, renderer, controls, group, grid;
-    let defaultDist = 6;
+    const defaultDist = 6;
 
     function setupThree(){
       // destruir anteriores
@@ -238,7 +271,7 @@ downloadURL: ${m.downloadURL}`;
       const w = cv.clientWidth || 1000, h = 560;
       cv.width = w; cv.height = h;
 
-      camera = new THREE.PerspectiveCamera(45, w/h, 0.1, 1000);
+      camera = new THREE.PerspectiveCamera(45, w/h, 0.05, 5000); // near/far seguros
       camera.position.set(2.5, 2.0, 3.5);
 
       renderer = new THREE.WebGLRenderer({ canvas: cv, antialias: true });
@@ -259,6 +292,8 @@ downloadURL: ${m.downloadURL}`;
       controls.enablePan = true;
       controls.autoRotate = autoRotateEl.checked;
       controls.autoRotateSpeed = 1.0;
+      controls.minDistance = 1.0;   // impede “entrar” no objeto
+      controls.maxDistance = 50.0;  // evita afastar demais
 
       // resize responsivo
       new ResizeObserver(()=> {
@@ -301,15 +336,21 @@ downloadURL: ${m.downloadURL}`;
         camera.position.set(0, 1.5, defaultDist);
         controls.update();
 
-        // (re)cria a grade abaixo do modelo
-        if (grid) { scene.remove(grid); grid.geometry?.dispose?.(); grid.material?.dispose?.(); grid = null; }
-        const gridSize = Math.ceil(Math.max(size.x, size.z) * 2) || 10;
-        grid = new THREE.GridHelper(gridSize, gridSize, 0x222233, 0x222233);
-
-        // calcula minY *depois* da centralização/escala
+        // (re)cria a grade abaixo do modelo — SEM atravessar
+        if (grid) {
+          scene.remove(grid);
+          grid.geometry?.dispose?.();
+          grid.material?.dispose?.();
+          grid = null;
+        }
         const newBox = new THREE.Box3().setFromObject(group);
+        const newSize = new THREE.Vector3(); newBox.getSize(newSize);
         const minY = newBox.min.y;
-        grid.position.y = minY - 0.01; // levemente abaixo
+
+        const gridSize = Math.ceil(Math.max(newSize.x, newSize.z) * 2) || 10;
+        grid = new THREE.GridHelper(gridSize, gridSize, 0x222233, 0x222233);
+        // coloca a grade um pouco ABAIXO do modelo
+        grid.position.y = minY - Math.max(0.01, newSize.y * 0.02);
         grid.visible = !!showGridEl?.checked;
         scene.add(grid);
 
